@@ -1,0 +1,174 @@
+dishwasher_lottery_draw:
+  alias: Dishwasher lottery draw
+  description: Give one ticket to each eligible member when a wash cycle finishes, then choose a winner using ticket-weighted odds. A valid manual selection takes precedence.
+  mode: single
+  fields:
+    force_now:
+      name: Draw now
+      required: false
+      selector:
+        boolean:
+  sequence:
+    - condition: template
+      value_template: >-
+        {{ (force_now | default(false) | bool)
+           or (is_state('sensor.dishwasher_program_finished','present')
+               and is_state('sensor.dishwasher_operation_state','finished')
+               and is_state('binary_sensor.dishwasher_program_aborted','off')
+               and states('sensor.dishwasher_door') in ['closed','locked']) }}
+    - variables:
+        lottery: >-
+          {% set already = is_state('input_boolean.dishwasher_lottery_tickets_distributed','on') %}
+          {% set rows = [
+            ('Member 1','person.household_member_1','input_number.dishwasher_lottery_tickets_member_1'),
+            ('Member 2','person.household_member_2','input_number.dishwasher_lottery_tickets_member_2'),
+            ('Member 3','person.household_member_3','input_number.dishwasher_lottery_tickets_member_3'),
+            ('Member 4','person.household_member_4','input_number.dishwasher_lottery_tickets_member_4')
+          ] %}
+          {% set ns = namespace(eligible=[], pool=[]) %}
+          {% for name, person, counter in rows %}
+            {% if is_state(person,'home') %}
+              {% set ns.eligible = ns.eligible + [name] %}
+              {% set count = states(counter)|int(0) + (0 if already else 1) %}
+              {% set count = [count,100]|min %}
+              {% for _ in range(count) %}
+                {% set ns.pool = ns.pool + [name] %}
+              {% endfor %}
+            {% endif %}
+          {% endfor %}
+          {% if not ns.pool %}
+            {% for name in ns.eligible %}
+              {% set ns.pool = ns.pool + [name] %}
+            {% endfor %}
+          {% endif %}
+          {% set selected = states('input_select.dishwasher_unload_turn') %}
+          {% if selected in ns.eligible %}
+            {% set winner = selected %}
+          {% elif not already and ns.pool %}
+            {% set winner = ns.pool|random %}
+          {% else %}
+            {% set winner = 'none' %}
+          {% endif %}
+          {% set winner_count = namespace(value=0) %}
+          {% for name, person, counter in rows %}
+            {% if name == winner %}
+              {% set credited = 1 if (not already and person in ['person.household_member_1','person.household_member_2','person.household_member_3','person.household_member_4'] and is_state(person,'home')) else 0 %}
+              {% set winner_count.value = [states(counter)|int(0) + credited,100]|min %}
+            {% endif %}
+          {% endfor %}
+          {{ dict(eligible=ns.eligible,winner=winner,winner_count=winner_count.value,should_credit=(not already and ns.eligible|length>0),already=already,charged=states('input_select.dishwasher_lottery_charge'))|to_json }}
+    - if:
+        - condition: template
+          value_template: "{{ (lottery|from_json).should_credit }}"
+      then:
+        - repeat:
+            for_each: "{{ (lottery|from_json).eligible }}"
+            sequence:
+              - choose:
+                  - conditions: "{{ repeat.item == 'Member 1' }}"
+                    sequence:
+                      - action: input_number.set_value
+                        target:
+                          entity_id: input_number.dishwasher_lottery_tickets_member_1
+                        data:
+                          value: "{{ [states('input_number.dishwasher_lottery_tickets_member_1')|int(0) + 1,100]|min }}"
+                  - conditions: "{{ repeat.item == 'Member 2' }}"
+                    sequence:
+                      - action: input_number.set_value
+                        target:
+                          entity_id: input_number.dishwasher_lottery_tickets_member_2
+                        data:
+                          value: "{{ [states('input_number.dishwasher_lottery_tickets_member_2')|int(0) + 1,100]|min }}"
+                  - conditions: "{{ repeat.item == 'Member 3' }}"
+                    sequence:
+                      - action: input_number.set_value
+                        target:
+                          entity_id: input_number.dishwasher_lottery_tickets_member_3
+                        data:
+                          value: "{{ [states('input_number.dishwasher_lottery_tickets_member_3')|int(0) + 1,100]|min }}"
+                  - conditions: "{{ repeat.item == 'Member 4' }}"
+                    sequence:
+                      - action: input_number.set_value
+                        target:
+                          entity_id: input_number.dishwasher_lottery_tickets_member_4
+                        data:
+                          value: "{{ [states('input_number.dishwasher_lottery_tickets_member_4')|int(0) + 1,100]|min }}"
+        - action: input_boolean.turn_on
+          target:
+            entity_id: input_boolean.dishwasher_lottery_tickets_distributed
+    - if:
+        - condition: template
+          value_template: "{{ (lottery|from_json).charged in ['Member 1','Member 2','Member 3','Member 4'] and (lottery|from_json).charged != (lottery|from_json).winner and (lottery|from_json).winner in ['Member 1','Member 2','Member 3','Member 4'] }}"
+      then:
+        - choose:
+            - conditions: "{{ (lottery|from_json).charged == 'Member 1' }}"
+              sequence:
+                - action: input_number.set_value
+                  target:
+                    entity_id: input_number.dishwasher_lottery_tickets_member_1
+                  data:
+                    value: "{{ [states('input_number.dishwasher_lottery_tickets_member_1')|int(0) + 1,100]|min }}"
+            - conditions: "{{ (lottery|from_json).charged == 'Member 2' }}"
+              sequence:
+                - action: input_number.set_value
+                  target:
+                    entity_id: input_number.dishwasher_lottery_tickets_member_2
+                  data:
+                    value: "{{ [states('input_number.dishwasher_lottery_tickets_member_2')|int(0) + 1,100]|min }}"
+            - conditions: "{{ (lottery|from_json).charged == 'Member 3' }}"
+              sequence:
+                - action: input_number.set_value
+                  target:
+                    entity_id: input_number.dishwasher_lottery_tickets_member_3
+                  data:
+                    value: "{{ [states('input_number.dishwasher_lottery_tickets_member_3')|int(0) + 1,100]|min }}"
+            - conditions: "{{ (lottery|from_json).charged == 'Member 4' }}"
+              sequence:
+                - action: input_number.set_value
+                  target:
+                    entity_id: input_number.dishwasher_lottery_tickets_member_4
+                  data:
+                    value: "{{ [states('input_number.dishwasher_lottery_tickets_member_4')|int(0) + 1,100]|min }}"
+    - if:
+        - condition: template
+          value_template: "{{ (lottery|from_json).winner in ['Member 1','Member 2','Member 3','Member 4'] and states('input_select.dishwasher_lottery_charge') != (lottery|from_json).winner }}"
+      then:
+        - choose:
+            - conditions: "{{ (lottery|from_json).winner == 'Member 1' }}"
+              sequence:
+                - action: input_number.set_value
+                  target:
+                    entity_id: input_number.dishwasher_lottery_tickets_member_1
+                  data:
+                    value: "{{ [(lottery|from_json).winner_count|int - 1,0]|max }}"
+            - conditions: "{{ (lottery|from_json).winner == 'Member 2' }}"
+              sequence:
+                - action: input_number.set_value
+                  target:
+                    entity_id: input_number.dishwasher_lottery_tickets_member_2
+                  data:
+                    value: "{{ [(lottery|from_json).winner_count|int - 1,0]|max }}"
+            - conditions: "{{ (lottery|from_json).winner == 'Member 3' }}"
+              sequence:
+                - action: input_number.set_value
+                  target:
+                    entity_id: input_number.dishwasher_lottery_tickets_member_3
+                  data:
+                    value: "{{ [(lottery|from_json).winner_count|int - 1,0]|max }}"
+            - conditions: "{{ (lottery|from_json).winner == 'Member 4' }}"
+              sequence:
+                - action: input_number.set_value
+                  target:
+                    entity_id: input_number.dishwasher_lottery_tickets_member_4
+                  data:
+                    value: "{{ [(lottery|from_json).winner_count|int - 1,0]|max }}"
+        - action: input_select.select_option
+          target:
+            entity_id: input_select.dishwasher_lottery_charge
+          data:
+            option: "{{ (lottery|from_json).winner }}"
+        - action: input_select.select_option
+          target:
+            entity_id: input_select.dishwasher_unload_turn
+          data:
+            option: "{{ (lottery|from_json).winner }}"

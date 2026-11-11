@@ -1,0 +1,161 @@
+- id: dishwasher_lottery_reset_on_new_cycle
+  alias: Dishwasher lottery – reset cycle guard
+  description: Reset the per-cycle distribution guard and charge marker when a new cycle starts.
+  triggers:
+    - trigger: state
+      entity_id: sensor.dishwasher_operation_state
+      to: run
+  conditions: []
+  actions:
+    - action: input_boolean.turn_off
+      target:
+        entity_id: input_boolean.dishwasher_lottery_tickets_distributed
+    - action: input_select.select_option
+      target:
+        entity_id: input_select.dishwasher_lottery_charge
+      data:
+        option: No ticket charged
+    - action: input_select.select_option
+      target:
+        entity_id: input_select.dishwasher_unload_turn
+      data:
+        option: Select a person
+  mode: single
+  initial_state: true
+
+- id: dishwasher_lottery_draw_on_completion
+  alias: Dishwasher lottery – draw on cycle completion
+  description: At confirmed completion, each member at home receives one ticket. The weighted draw consumes the winner’s ticket; manual assignment is supported.
+  triggers:
+    - trigger: state
+      entity_id: sensor.dishwasher_program_finished
+      to: present
+    - trigger: state
+      entity_id: sensor.dishwasher_operation_state
+      to: finished
+    - trigger: state
+      entity_id:
+        - person.household_member_1
+        - person.household_member_2
+        - person.household_member_3
+        - person.household_member_4
+      to: home
+  conditions:
+    - condition: state
+      entity_id: sensor.dishwasher_program_finished
+      state: present
+    - condition: state
+      entity_id: sensor.dishwasher_operation_state
+      state: finished
+    - condition: state
+      entity_id: binary_sensor.dishwasher_program_aborted
+      state: 'off'
+    - condition: template
+      value_template: "{{ states('sensor.dishwasher_door') in ['closed','locked'] }}"
+  actions:
+    - delay:
+        seconds: 5
+    - condition: state
+      entity_id: sensor.dishwasher_program_finished
+      state: present
+    - condition: state
+      entity_id: sensor.dishwasher_operation_state
+      state: finished
+    - condition: state
+      entity_id: binary_sensor.dishwasher_program_aborted
+      state: 'off'
+    - condition: template
+      value_template: "{{ states('sensor.dishwasher_door') in ['closed','locked'] }}"
+    - action: script.dishwasher_lottery_draw
+  mode: single
+  initial_state: true
+
+- id: dishwasher_lottery_manual_assignment
+  alias: Dishwasher lottery – manual assignment
+  description: Changing the selected member after completion refunds the previous ticket and charges the new selection. A selection made before completion is charged when the cycle completes.
+  triggers:
+    - trigger: state
+      entity_id: input_select.dishwasher_unload_turn
+  conditions: []
+  actions:
+    - variables:
+        selected: "{{ states('input_select.dishwasher_unload_turn') }}"
+        charged: "{{ states('input_select.dishwasher_lottery_charge') }}"
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: >-
+                {{ selected in ['Member 1','Member 2','Member 3','Member 4']
+                   and selected != charged
+                   and is_state('input_boolean.dishwasher_lottery_tickets_distributed','on')
+                   and is_state('sensor.dishwasher_program_finished','present')
+                   and is_state('sensor.dishwasher_operation_state','finished')
+                   and is_state('binary_sensor.dishwasher_program_aborted','off')
+                   and states('sensor.dishwasher_door') in ['closed','locked'] }}
+          sequence:
+            - choose:
+                - conditions: "{{ charged == 'Member 1' }}"
+                  sequence:
+                    - action: input_number.set_value
+                      target:
+                        entity_id: input_number.dishwasher_lottery_tickets_member_1
+                      data:
+                        value: "{{ [states('input_number.dishwasher_lottery_tickets_member_1')|int(0) + 1,100]|min }}"
+                - conditions: "{{ charged == 'Member 2' }}"
+                  sequence:
+                    - action: input_number.set_value
+                      target:
+                        entity_id: input_number.dishwasher_lottery_tickets_member_2
+                      data:
+                        value: "{{ [states('input_number.dishwasher_lottery_tickets_member_2')|int(0) + 1,100]|min }}"
+                - conditions: "{{ charged == 'Member 3' }}"
+                  sequence:
+                    - action: input_number.set_value
+                      target:
+                        entity_id: input_number.dishwasher_lottery_tickets_member_3
+                      data:
+                        value: "{{ [states('input_number.dishwasher_lottery_tickets_member_3')|int(0) + 1,100]|min }}"
+                - conditions: "{{ charged == 'Member 4' }}"
+                  sequence:
+                    - action: input_number.set_value
+                      target:
+                        entity_id: input_number.dishwasher_lottery_tickets_member_4
+                      data:
+                        value: "{{ [states('input_number.dishwasher_lottery_tickets_member_4')|int(0) + 1,100]|min }}"
+            - choose:
+                - conditions: "{{ selected == 'Member 1' }}"
+                  sequence:
+                    - action: input_number.set_value
+                      target:
+                        entity_id: input_number.dishwasher_lottery_tickets_member_1
+                      data:
+                        value: "{{ [states('input_number.dishwasher_lottery_tickets_member_1')|int(0) - 1,0]|max }}"
+                - conditions: "{{ selected == 'Member 2' }}"
+                  sequence:
+                    - action: input_number.set_value
+                      target:
+                        entity_id: input_number.dishwasher_lottery_tickets_member_2
+                      data:
+                        value: "{{ [states('input_number.dishwasher_lottery_tickets_member_2')|int(0) - 1,0]|max }}"
+                - conditions: "{{ selected == 'Member 3' }}"
+                  sequence:
+                    - action: input_number.set_value
+                      target:
+                        entity_id: input_number.dishwasher_lottery_tickets_member_3
+                      data:
+                        value: "{{ [states('input_number.dishwasher_lottery_tickets_member_3')|int(0) - 1,0]|max }}"
+                - conditions: "{{ selected == 'Member 4' }}"
+                  sequence:
+                    - action: input_number.set_value
+                      target:
+                        entity_id: input_number.dishwasher_lottery_tickets_member_4
+                      data:
+                        value: "{{ [states('input_number.dishwasher_lottery_tickets_member_4')|int(0) - 1,0]|max }}"
+            - action: input_select.select_option
+              target:
+                entity_id: input_select.dishwasher_lottery_charge
+              data:
+                option: "{{ selected }}"
+  mode: queued
+  max: 10
+  initial_state: true

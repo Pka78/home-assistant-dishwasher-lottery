@@ -1,0 +1,47 @@
+# Add these helpers under the corresponding top-level sections in configuration.yaml,
+# or adapt them to the Helpers UI. Values are restored by Home Assistant.
+input_number:
+  dishwasher_lottery_tickets_member_1:
+    name: Dishwasher lottery tickets – member 1
+    min: 0
+    max: 100
+    step: 1
+    mode: box
+  dishwasher_lottery_tickets_member_2:
+    name: Dishwasher lottery tickets – member 2
+    min: 0
+    max: 100
+    step: 1
+    mode: box
+  dishwasher_lottery_tickets_member_3:
+    name: Dishwasher lottery tickets – member 3
+    min: 0
+    max: 100
+    step: 1
+    mode: box
+  dishwasher_lottery_tickets_member_4:
+    name: Dishwasher lottery tickets – member 4
+    min: 0
+    max: 100
+    step: 1
+    mode: box
+input_boolean:
+  dishwasher_lottery_tickets_distributed:
+    name: Dishwasher lottery tickets distributed this cycle
+input_select:
+  dishwasher_unload_turn:
+    name: Dishwasher unload turn
+    options:
+      - Select a person
+      - Member 1
+      - Member 2
+      - Member 3
+      - Member 4
+  dishwasher_lottery_charge:
+    name: Dishwasher lottery charged ticket
+    options:
+      - No ticket charged
+      - Member 1
+      - Member 2
+      - Member 3
+      - Member 4
