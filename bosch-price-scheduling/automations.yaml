@@ -1,0 +1,386 @@
+# Generic Home Assistant + Bosch Home Connect example. Adapt entity IDs and device_id first.
+
+-
+  id: "dishwasher_price_schedule_plan"
+  alias: "Dishwasher - find and send cheapest delay"
+  description: "Find the cheapest valid window and send the appliance delayed-start request immediately."
+  triggers:
+    -
+      trigger: "state"
+      entity_id: "input_button.dishwasher_find_cheapest_start"
+  conditions: []
+  actions:
+    -
+      variables:
+        start_ts: |-
+          {%- set deadline = as_timestamp(states('input_datetime.dishwasher_finish_deadline'), 0) -%}
+          {%- set current = as_timestamp(now()) -%}
+          {%- set program = states('select.dishwasher_program') -%}
+          {%- set blocks = 20 if program == 'dishcare_dishwasher_program_eco_50' else 10 -%}
+          {%- set duration = blocks * 900 -%}
+          {%- set buffer = 30 * 60 -%}
+          {%- set slots = (state_attr('sensor.electricity_price_quarter_hour', 'raw_today') or [])
+            + (state_attr('sensor.electricity_price_quarter_hour', 'raw_tomorrow') or []) -%}
+          {%- set ns = namespace(best_start=0, best_cost=1000000) -%}
+          {%- if deadline > current + duration + buffer + 300
+                and deadline <= current + 48 * 3600
+                and slots | count >= blocks -%}
+            {%- for i in range(0, slots | count - blocks + 1) -%}
+              {%- set start = as_timestamp(slots[i]['start'], 0) -%}
+              {%- if start >= current + 300
+                    and start - current <= 86340
+                    and start + duration + buffer <= deadline -%}
+                {%- set candidate = namespace(valid=true, cost=0) -%}
+                {%- for j in range(blocks) -%}
+                  {%- set slot = slots[i + j] -%}
+                  {%- set price = slot['value'] | float(none) -%}
+                  {%- if as_timestamp(slot['start'], 0) != start + j * 900
+                        or as_timestamp(slot['end'], 0) != start + (j + 1) * 900
+                        or price is none -%}
+                    {%- set candidate.valid = false -%}
+                  {%- else -%}
+                    {%- set candidate.cost = candidate.cost + price -%}
+                  {%- endif -%}
+                {%- endfor -%}
+                {%- if candidate.valid and candidate.cost < ns.best_cost -%}
+                  {%- set ns.best_start = start -%}
+                  {%- set ns.best_cost = candidate.cost -%}
+                {%- endif -%}
+              {%- endif -%}
+            {%- endfor -%}
+          {%- endif -%}
+          {{ ns.best_start | int }}
+        program: "{{ states('select.dishwasher_program') }}"
+    -
+      choose:
+        -
+          conditions:
+            -
+              condition: "template"
+              value_template: "{{ not (is_state('binary_sensor.dishwasher_connectivity','on') and is_state('binary_sensor.dishwasher_remote_control','on') and is_state('binary_sensor.dishwasher_remote_start','on') and states('sensor.dishwasher_door') in ['closed','locked'] and is_state('sensor.dishwasher_operation_state','ready') and is_state('switch.dishwasher_power','on') and states('select.dishwasher_program') in ['dishcare_dishwasher_program_eco_50','dishcare_dishwasher_program_auto_2'] and is_state('input_boolean.dishwasher_price_schedule_active','off')) }}"
+          sequence:
+            -
+              action: "persistent_notification.create"
+              data:
+                notification_id: "dishwasher_price_schedule"
+                title: "Bosch-ajastus ei onnistunut"
+                message: "Valitse koneessa tai kortissa Eco tai Auto, sulje luukku ja ota etäkäynnistys käyttöön. Koneen on oltava päällä, yhteydessä ja valmis. Jos Boschilla on jo viivekäynnistys, peru se ensin."
+        -
+          conditions:
+            -
+              condition: "template"
+              value_template: "{{ start_ts | int(0) == 0 }}"
+          sequence:
+            -
+              action: "persistent_notification.create"
+              data:
+                notification_id: "dishwasher_price_schedule"
+                title: "Bosch-ajastus ei onnistunut"
+                message: "Tavoite on liian lähellä tai tarvittavia varttihintoja ei ole julkaistu. Eco varaa 5 tuntia, Auto 2,5 tuntia ja molemmat lisäksi 30 minuutin marginaalin. Boschin aloitusviive saa olla enintään noin 24 tuntia."
+      default:
+        -
+          variables:
+            delay_seconds: "{{ (((start_ts | int - as_timestamp(now()) | int) + 59) // 60 * 60) | int }}"
+        -
+          choose:
+            -
+              conditions:
+                -
+                  condition: "template"
+                  value_template: "{{ delay_seconds | int < 60 or delay_seconds | int > 86340 }}"
+              sequence:
+                -
+                  action: "persistent_notification.create"
+                  data:
+                    notification_id: "dishwasher_price_schedule"
+                    title: "Bosch-ajastus ei onnistunut"
+                    message: "Sopiva aloitus meni ohi tai ylittää Boschin salliman viiveen. Hae aika uudelleen."
+          default:
+            -
+              action: "home_connect.set_program_and_options"
+              data:
+                device_id: "REPLACE_WITH_HOME_CONNECT_DEVICE_ID"
+                affects_to: "active_program"
+                program: "{{ program }}"
+                b_s_h_common_option_start_in_relative: "{{ delay_seconds | int }}"
+            -
+              action: "input_datetime.set_datetime"
+              target:
+                entity_id: "input_datetime.dishwasher_planned_start"
+              data:
+                timestamp: "{{ start_ts | int }}"
+            -
+              action: "input_boolean.turn_on"
+              target:
+                entity_id: "input_boolean.dishwasher_price_schedule_active"
+            -
+              action: "homeassistant.update_entity"
+              target:
+                entity_id:
+                  - "sensor.dishwasher_operation_state"
+                  - "number.dishwasher_start_in_relative"
+              continue_on_error: true
+            -
+              action: "persistent_notification.create"
+              data:
+                notification_id: "dishwasher_price_schedule"
+                title: "Bosch-ajastus lähetetty"
+                message: "{{ 'Eco' if program == 'dishcare_dishwasher_program_eco_50' else 'Auto' }}-ohjelman viivekäynnistys lähetettiin Boschille. Aloitus noin {{ (start_ts | int | as_datetime | as_local).strftime('%d.%m. klo %H.%M') }}. Home Connectin tilatieto voi päivittyä viiveellä; ajastus näkyy popupissa lähetyksestä aloitukseen asti."
+  mode: "single"
+-
+  id: "dishwasher_price_schedule_cancel"
+  alias: "Dishwasher - cancel delayed start"
+  description: "Cancel only a pending delayed start; never stop a running wash."
+  triggers:
+    -
+      trigger: "state"
+      entity_id: "input_button.dishwasher_cancel_price_schedule"
+  conditions: []
+  actions:
+    -
+      action: "homeassistant.update_entity"
+      target:
+        entity_id:
+          - "sensor.dishwasher_operation_state"
+          - "number.dishwasher_start_in_relative"
+      continue_on_error: true
+    -
+      choose:
+        -
+          conditions:
+            -
+              condition: "state"
+              entity_id: "sensor.dishwasher_operation_state"
+              state: "run"
+          sequence:
+            -
+              action: "input_boolean.turn_off"
+              target:
+                entity_id: "input_boolean.dishwasher_price_schedule_active"
+            -
+              action: "persistent_notification.create"
+              data:
+                notification_id: "dishwasher_price_schedule"
+                title: "Pesu on jo käynnissä"
+                message: "Peru ajastus ei pysäytä käynnissä olevaa pesua."
+        -
+          conditions:
+            -
+              condition: "template"
+              value_template: "{{ is_state('sensor.dishwasher_operation_state','delayedstart') or (is_state('input_boolean.dishwasher_price_schedule_active','on') and as_timestamp(states('input_datetime.dishwasher_planned_start'),0) > as_timestamp(now()) and states('sensor.dishwasher_operation_state') not in ['run','finished','error','aborting']) }}"
+          sequence:
+            -
+              action: "button.press"
+              target:
+                entity_id: "button.dishwasher_stop_program"
+              continue_on_error: true
+            -
+              delay: "00:00:03"
+            -
+              action: "homeassistant.update_entity"
+              target:
+                entity_id:
+                  - "sensor.dishwasher_operation_state"
+                  - "number.dishwasher_start_in_relative"
+              continue_on_error: true
+            -
+              wait_template: "{{ states('sensor.dishwasher_operation_state') in ['ready','inactive','finished'] and is_number(states('number.dishwasher_start_in_relative')) and states('number.dishwasher_start_in_relative')|float(0) <= 0 }}"
+              timeout: "00:00:30"
+              continue_on_timeout: true
+            -
+              choose:
+                -
+                  conditions:
+                    -
+                      condition: "template"
+                      value_template: "{{ states('sensor.dishwasher_operation_state') in ['ready','inactive','finished'] and is_number(states('number.dishwasher_start_in_relative')) and states('number.dishwasher_start_in_relative')|float(0) <= 0 }}"
+                  sequence:
+                    -
+                      action: "input_boolean.turn_off"
+                      target:
+                        entity_id: "input_boolean.dishwasher_price_schedule_active"
+                    -
+                      action: "persistent_notification.create"
+                      data:
+                        notification_id: "dishwasher_price_schedule"
+                        title: "Bosch-ajastus peruttu"
+                        message: "Home Connect vahvisti, ettei viivekäynnistystä enää ole. Käynnissä olevaa pesua ei pysäytetty."
+              default:
+                -
+                  action: "persistent_notification.create"
+                  data:
+                    notification_id: "dishwasher_price_schedule"
+                    title: "Bosch-ajastuksen peruutus odottaa vahvistusta"
+                    message: "Peruutuspyyntö lähetettiin, mutta Home Connect ei vielä vahvistanut viiveen poistumista. Ajastusmerkintä säilyi; tarkista koneen tila ennen uutta ajastusta."
+        -
+          conditions:
+            -
+              condition: "template"
+              value_template: "{{ is_state('input_boolean.dishwasher_price_schedule_active','on') and is_state('sensor.dishwasher_operation_state','ready') and is_number(states('number.dishwasher_start_in_relative')) and states('number.dishwasher_start_in_relative')|float(0) <= 0 }}"
+          sequence:
+            -
+              action: "input_boolean.turn_off"
+              target:
+                entity_id: "input_boolean.dishwasher_price_schedule_active"
+            -
+              action: "persistent_notification.create"
+              data:
+                notification_id: "dishwasher_price_schedule"
+                title: "Ajastusmerkintä poistettu"
+                message: "Bosch ei ilmoita aktiivisesta viivekäynnistyksestä. Ajastusmerkintä poistettiin."
+        -
+          conditions:
+            -
+              condition: "template"
+              value_template: "{{ is_state('input_boolean.dishwasher_price_schedule_active','on') and states('sensor.dishwasher_operation_state') in ['unknown','unavailable'] }}"
+          sequence:
+            -
+              action: "persistent_notification.create"
+              data:
+                notification_id: "dishwasher_price_schedule"
+                title: "Bosch-ajastuksen peruutusta ei voitu varmistaa"
+                message: "Home Connectin tilatieto puuttuu. Ajastusmerkintä säilyi; tarkista kone ennen uutta yritystä."
+      default:
+        -
+          action: "input_boolean.turn_off"
+          target:
+            entity_id: "input_boolean.dishwasher_price_schedule_active"
+        -
+          action: "persistent_notification.create"
+          data:
+            notification_id: "dishwasher_price_schedule"
+            title: "Ajastusmerkintä poistettu"
+            message: "Bosch ei ilmoita aktiivisesta viivekäynnistyksestä."
+  mode: "single"
+-
+  id: "dishwasher_price_schedule_watch"
+  alias: "Dishwasher - watch schedule changes"
+  description: "Track the finish deadline and appliance state, clearing stale schedule state safely."
+  triggers:
+    -
+      trigger: "state"
+      entity_id: "input_datetime.dishwasher_finish_deadline"
+      id: "deadline"
+    -
+      trigger: "state"
+      entity_id: "sensor.dishwasher_operation_state"
+      id: "operation"
+  conditions:
+    -
+      condition: "state"
+      entity_id: "input_boolean.dishwasher_price_schedule_active"
+      state: "on"
+  actions:
+    -
+      action: "homeassistant.update_entity"
+      target:
+        entity_id:
+          - "sensor.dishwasher_operation_state"
+          - "number.dishwasher_start_in_relative"
+      continue_on_error: true
+    -
+      choose:
+        -
+          conditions:
+            -
+              condition: "template"
+              value_template: "{{ trigger.id == 'deadline' and (is_state('sensor.dishwasher_operation_state','delayedstart') or (as_timestamp(states('input_datetime.dishwasher_planned_start'),0) > as_timestamp(now()) and states('sensor.dishwasher_operation_state') not in ['run','finished','error','aborting'])) }}"
+          sequence:
+            -
+              action: "button.press"
+              target:
+                entity_id: "button.dishwasher_stop_program"
+              continue_on_error: true
+            -
+              delay: "00:00:03"
+            -
+              action: "homeassistant.update_entity"
+              target:
+                entity_id:
+                  - "sensor.dishwasher_operation_state"
+                  - "number.dishwasher_start_in_relative"
+              continue_on_error: true
+            -
+              wait_template: "{{ states('sensor.dishwasher_operation_state') in ['ready','inactive','finished'] and is_number(states('number.dishwasher_start_in_relative')) and states('number.dishwasher_start_in_relative')|float(0) <= 0 }}"
+              timeout: "00:00:30"
+              continue_on_timeout: true
+            -
+              choose:
+                -
+                  conditions:
+                    -
+                      condition: "template"
+                      value_template: "{{ states('sensor.dishwasher_operation_state') in ['ready','inactive','finished'] and is_number(states('number.dishwasher_start_in_relative')) and states('number.dishwasher_start_in_relative')|float(0) <= 0 }}"
+                  sequence:
+                    -
+                      action: "input_boolean.turn_off"
+                      target:
+                        entity_id: "input_boolean.dishwasher_price_schedule_active"
+                    -
+                      action: "persistent_notification.create"
+                      data:
+                        notification_id: "dishwasher_price_schedule"
+                        title: "Bosch-ajastus peruttu"
+                        message: "Valmistumisajan muuttuessa Bosch vahvisti aiemman viivekäynnistyksen poistuneen. Hae uusi aika halutessasi."
+              default:
+                -
+                  action: "persistent_notification.create"
+                  data:
+                    notification_id: "dishwasher_price_schedule"
+                    title: "Bosch-ajastuksen peruutus odottaa vahvistusta"
+                    message: "Määräaika muuttui, mutta Boschin viivekäynnistyksen poistumista ei vahvistettu. Ajastusmerkintä säilyi; tarkista kone ennen uutta ajastusta."
+        -
+          conditions:
+            -
+              condition: "template"
+              value_template: "{{ trigger.id == 'operation' and states('sensor.dishwasher_operation_state') == 'run' }}"
+          sequence:
+            -
+              action: "input_boolean.turn_off"
+              target:
+                entity_id: "input_boolean.dishwasher_price_schedule_active"
+        -
+          conditions:
+            -
+              condition: "template"
+              value_template: "{{ trigger.id == 'operation' and states('sensor.dishwasher_operation_state') in ['finished','error','aborting','inactive'] }}"
+          sequence:
+            -
+              action: "input_boolean.turn_off"
+              target:
+                entity_id: "input_boolean.dishwasher_price_schedule_active"
+            -
+              action: "persistent_notification.create"
+              data:
+                notification_id: "dishwasher_price_schedule"
+                title: "Bosch-ajastuksen tila päättyi"
+                message: "Kone poistui ajastuksesta tai pesu päättyi. Tarkista koneen tila."
+  mode: "single"
+-
+  id: "dishwasher_price_schedule_default_deadline"
+  alias: "Dishwasher - roll default deadline to 07:30"
+  description: "Move a past deadline to the next local 07:30 only while no schedule is active."
+  triggers:
+    -
+      trigger: "time_pattern"
+      minutes: "/5"
+    -
+      trigger: "state"
+      entity_id: "input_boolean.dishwasher_price_schedule_active"
+      to: "off"
+  conditions:
+    -
+      condition: "state"
+      entity_id: "input_boolean.dishwasher_price_schedule_active"
+      state: "off"
+    -
+      condition: "template"
+      value_template: "{{ as_timestamp(states('input_datetime.dishwasher_finish_deadline'), 0) <= as_timestamp(now()) }}"
+  actions:
+    -
+      action: "input_datetime.set_datetime"
+      target:
+        entity_id: "input_datetime.dishwasher_finish_deadline"
+      data:
+        datetime: "{{ (today_at('07:30') if now() < today_at('07:30') else today_at('07:30') + timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S') }}"
+  mode: "single"

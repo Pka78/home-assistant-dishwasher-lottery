@@ -68,3 +68,7 @@ The `input_select.dishwasher_unload_turn` helper is the manual override. Leave i
 The example uses generic member labels and generic entity IDs. Do not add real names, household entity IDs, notification targets, addresses, network details, or secrets to a public copy.
 
 No license is included. Until a license is added, do not assume the code is licensed for redistribution or reuse.
+
+## Optional module: Bosch price-optimized scheduling
+
+The separate [`bosch-price-scheduling`](bosch-price-scheduling/) module demonstrates finish-deadline planning with quarter-hour prices and Bosch Home Connect's own delayed start. It is independent of the ticket lottery and has separate helpers, automations, setup notes, and a flow diagram.

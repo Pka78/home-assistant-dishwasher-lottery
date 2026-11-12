@@ -1,0 +1,37 @@
+{%- set deadline = as_timestamp(states('input_datetime.dishwasher_finish_deadline'), 0) -%}
+{%- set current = as_timestamp(now()) -%}
+{%- set program = states('select.dishwasher_program') -%}
+{%- set blocks = 20 if program == 'dishcare_dishwasher_program_eco_50' else 10 -%}
+{%- set duration = blocks * 900 -%}
+{%- set buffer = 30 * 60 -%}
+{%- set slots = (state_attr('sensor.electricity_price_quarter_hour', 'raw_today') or [])
+  + (state_attr('sensor.electricity_price_quarter_hour', 'raw_tomorrow') or []) -%}
+{%- set ns = namespace(best_start=0, best_cost=1000000) -%}
+{%- if deadline > current + duration + buffer + 300
+      and deadline <= current + 48 * 3600
+      and slots | count >= blocks -%}
+  {%- for i in range(0, slots | count - blocks + 1) -%}
+    {%- set start = as_timestamp(slots[i]['start'], 0) -%}
+    {%- if start >= current + 300
+          and start - current <= 86340
+          and start + duration + buffer <= deadline -%}
+      {%- set candidate = namespace(valid=true, cost=0) -%}
+      {%- for j in range(blocks) -%}
+        {%- set slot = slots[i + j] -%}
+        {%- set price = slot['value'] | float(none) -%}
+        {%- if as_timestamp(slot['start'], 0) != start + j * 900
+              or as_timestamp(slot['end'], 0) != start + (j + 1) * 900
+              or price is none -%}
+          {%- set candidate.valid = false -%}
+        {%- else -%}
+          {%- set candidate.cost = candidate.cost + price -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {%- if candidate.valid and candidate.cost < ns.best_cost -%}
+        {%- set ns.best_start = start -%}
+        {%- set ns.best_cost = candidate.cost -%}
+      {%- endif -%}
+    {%- endif -%}
+  {%- endfor -%}
+{%- endif -%}
+{{ ns.best_start | int }}
