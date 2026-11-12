@@ -159,3 +159,47 @@
   mode: queued
   max: 10
   initial_state: true
+
+- id: dishwasher_lottery_monthly_balance_normalization
+  alias: Dishwasher lottery – normalize ticket balances monthly
+  description: On the first day of each month at 00:01, subtract the shared minimum from all four valid ticket counters. Invalid or out-of-range values cause no changes.
+  triggers:
+    - trigger: time
+      at: "00:01:00"
+  conditions:
+    - condition: template
+      value_template: "{{ now().day == 1 }}"
+  actions:
+    - variables:
+        minimum: >-
+          {% set raw = [
+            states('input_number.dishwasher_lottery_tickets_member_1'),
+            states('input_number.dishwasher_lottery_tickets_member_2'),
+            states('input_number.dishwasher_lottery_tickets_member_3'),
+            states('input_number.dishwasher_lottery_tickets_member_4')
+          ] %}
+          {% set ns = namespace(valid=true) %}
+          {% for value in raw %}
+            {% if not is_number(value) or value|float < 0 or value|float > 100 %}
+              {% set ns.valid = false %}
+            {% endif %}
+          {% endfor %}
+          {% if ns.valid %}{{ (raw|map('float')|map('int')|list)|min }}{% else %}-1{% endif %}
+    - if:
+        - condition: template
+          value_template: "{{ minimum|int(-1) > 0 }}"
+      then:
+        - repeat:
+            for_each:
+              - input_number.dishwasher_lottery_tickets_member_1
+              - input_number.dishwasher_lottery_tickets_member_2
+              - input_number.dishwasher_lottery_tickets_member_3
+              - input_number.dishwasher_lottery_tickets_member_4
+            sequence:
+              - action: input_number.set_value
+                target:
+                  entity_id: "{{ repeat.item }}"
+                data:
+                  value: "{{ [states(repeat.item)|float(-1)|int - minimum|int(-1),0]|max }}"
+  mode: single
+  initial_state: true

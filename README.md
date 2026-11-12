@@ -6,9 +6,15 @@ A reusable Home Assistant YAML example for fairly assigning the dishwasher-unloa
 
 - `helpers.yaml` — ticket counters, cycle guard, manual-turn selector, and last-charged selector
 - `script.yaml` — weighted random draw, ticket distribution, and ticket accounting
-- `automations.yaml` — cycle reset, confirmed-completion draw, and manual reassignment
+- `automations.yaml` — cycle reset, confirmed-completion draw, manual reassignment, and monthly ticket-balance normalization
 
 The example does not start, stop, or control the dishwasher. It has no notifications or dashboard UI.
+
+## At a glance
+
+![Dishwasher lottery flow](docs/lottery-flow.svg)
+
+![Monthly ticket balance normalization](docs/monthly-ticket-normalization.svg)
 
 ## How a cycle works
 
@@ -19,6 +25,8 @@ The example does not start, stop, or control the dishwasher. It has no notificat
 5. Changing the selected person after completion refunds the previous winner's ticket and charges the newly selected person.
 
 If nobody is home, no ticket is distributed and no winner is selected. Ticket counters are capped at 100. Adjust that cap if your use case needs a different limit.
+
+On the first day of each month at 00:01 Home Assistant local time, a separate automation subtracts the smallest of the four balances from every balance, but only when all four values are valid and within 0–100. For example, `3, 4, 3, 4` becomes `0, 1, 0, 1`. This keeps the relative ticket differences while preventing long-term counter growth. If the minimum is already zero, nothing changes; invalid or unavailable values fail closed. It does not award or consume tickets and does not control the appliance.
 
 ## Install as a Home Assistant package
 
