@@ -28,6 +28,10 @@ input_number:
 input_boolean:
   dishwasher_lottery_tickets_distributed:
     name: Dishwasher lottery tickets distributed this cycle
+input_button:
+  dishwasher_unload_confirmed:
+    name: Confirm dishwasher emptied
+    icon: mdi:check-circle-outline
 input_select:
   dishwasher_unload_turn:
     name: Dishwasher unload turn
